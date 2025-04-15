@@ -1,3 +1,9 @@
+---
+title: tts
+app_file: gradio_app.py
+sdk: gradio
+sdk_version: 5.25.1
+---
 # Bark Text-to-Speech Generator
 
 An interactive text-to-speech application powered by Suno's Bark AI model and Streamlit.
