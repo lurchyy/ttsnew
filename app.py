@@ -462,24 +462,20 @@ def api_generate():
         
         # Extract parameters
         text = data.get('text', '')
-        voice_name = data.get('voice', 'Voice 1')
+        voice_preset = data.get('voice_preset')
+        style = data.get('style', 'default').lower()
         pitch = int(data.get('pitch', 0))
         speed = float(data.get('speed', 1.0))
-        voice_style = data.get('style', 'default').lower()
+        text_temp = float(data.get('text_temp', 0.7))
+        waveform_temp = float(data.get('waveform_temp', 0.7))
+        add_pauses = data.get('add_pauses', True)
         
-        # Get voice preset
-        voice_preset = Voice_presets.get(voice_name, Voice_presets['Voice 1'])
-        
-        # Apply voice style
-        text_temp, waveform_temp, add_pauses = apply_voice_style(voice_style)
-        
-        # Override with custom values if provided
-        if 'text_temp' in data:
-            text_temp = float(data.get('text_temp'))
-        if 'waveform_temp' in data:
-            waveform_temp = float(data.get('waveform_temp'))
-        if 'add_pauses' in data:
-            add_pauses = data.get('add_pauses')
+        # If voice_preset is a voice name, lookup the actual preset
+        if voice_preset in Voice_presets:
+            voice_preset = Voice_presets[voice_preset]
+        # If no valid preset, use default
+        if not voice_preset or voice_preset not in list(Voice_presets.values()):
+            voice_preset = Voice_presets['Voice 1']
         
         # Generate audio
         audio_data = generate_audio_from_text(
@@ -497,12 +493,12 @@ def api_generate():
             audio_b64 = base64.b64encode(audio_data).decode('utf-8')
             return jsonify({
                 'success': True,
-                'audio': audio_b64,
+                'audio_data': audio_b64,
                 'format': 'wav',
                 'sample_rate': SAMPLE_RATE,
                 'params': {
-                    'voice': voice_name,
                     'voice_preset': voice_preset,
+                    'style': style,
                     'pitch': pitch,
                     'speed': speed,
                     'text_temp': text_temp,
@@ -535,24 +531,20 @@ def api_generate_streaming():
             session_id = str(uuid.uuid4())
             
         text = data.get('text', '')
-        voice_name = data.get('voice', 'Voice 1')
+        voice_preset = data.get('voice_preset')
+        style = data.get('style', 'default').lower()
         pitch = int(data.get('pitch', 0))
         speed = float(data.get('speed', 1.0))
-        voice_style = data.get('style', 'default').lower()
+        text_temp = float(data.get('text_temp', 0.7))
+        waveform_temp = float(data.get('waveform_temp', 0.7))
+        add_pauses = data.get('add_pauses', True)
         
-        # Get voice preset
-        voice_preset = Voice_presets.get(voice_name, Voice_presets['Voice 1'])
-        
-        # Apply voice style
-        text_temp, waveform_temp, add_pauses = apply_voice_style(voice_style)
-        
-        # Override with custom values if provided
-        if 'text_temp' in data:
-            text_temp = float(data.get('text_temp'))
-        if 'waveform_temp' in data:
-            waveform_temp = float(data.get('waveform_temp'))
-        if 'add_pauses' in data:
-            add_pauses = data.get('add_pauses')
+        # If voice_preset is a voice name, lookup the actual preset
+        if voice_preset in Voice_presets:
+            voice_preset = Voice_presets[voice_preset]
+        # If no valid preset, use default
+        if not voice_preset or voice_preset not in list(Voice_presets.values()):
+            voice_preset = Voice_presets['Voice 1']
         
         # Generate audio streaming
         audio_data = generate_audio_streaming(
@@ -572,12 +564,12 @@ def api_generate_streaming():
             return jsonify({
                 'success': True,
                 'session_id': session_id,
-                'audio': audio_b64,
+                'audio_data': audio_b64,
                 'format': 'wav',
                 'sample_rate': SAMPLE_RATE,
                 'params': {
-                    'voice': voice_name,
                     'voice_preset': voice_preset,
+                    'style': style,
                     'pitch': pitch,
                     'speed': speed,
                     'text_temp': text_temp,
@@ -589,7 +581,7 @@ def api_generate_streaming():
             return jsonify({
                 'success': True,  # Still success but no new audio
                 'session_id': session_id,
-                'audio': None,
+                'audio_data': None,
                 'message': 'No new audio to generate'
             })
     
@@ -629,16 +621,79 @@ def reset_streaming():
 
 @app.route('/api/voices', methods=['GET'])
 def get_voices():
+    voices = []
+    for name, preset_id in Voice_presets.items():
+        voices.append({
+            'id': preset_id,
+            'name': name
+        })
+    
     return jsonify({
         'success': True,
-        'voices': list(Voice_presets.keys())
+        'voices': voices
     })
 
 @app.route('/api/styles', methods=['GET'])
 def get_styles():
+    styles = [
+        {'id': 'default', 'name': 'Default'},
+        {'id': 'natural', 'name': 'Natural'},
+        {'id': 'expressive', 'name': 'Expressive'}
+    ]
+    
     return jsonify({
         'success': True,
-        'styles': ['Default', 'Natural', 'Expressive']
+        'styles': styles
+    })
+
+@app.route('/api/style_info', methods=['GET'])
+def get_style_info():
+    style = request.args.get('style', 'default').lower()
+    
+    style_info = {
+        'default': 'Default style with balanced parameters.',
+        'natural': 'More natural-sounding with lower temperatures for a consistent voice.',
+        'expressive': 'More expressive with higher temperatures for creative variation.'
+    }
+    
+    return jsonify({
+        'success': True,
+        'info': style_info.get(style, 'No information available for this style.')
+    })
+
+@app.route('/api/apply_style', methods=['GET'])
+def apply_style():
+    style = request.args.get('style', 'default').lower()
+    
+    # Define style parameters
+    style_params = {
+        'default': {
+            'pitch': 0,
+            'speed': 1.0,
+            'text_temp': 0.7,
+            'waveform_temp': 0.7
+        },
+        'natural': {
+            'pitch': 0,
+            'speed': 1.0,
+            'text_temp': 0.6,
+            'waveform_temp': 0.5
+        },
+        'expressive': {
+            'pitch': 0,
+            'speed': 1.0,
+            'text_temp': 0.9,
+            'waveform_temp': 0.8
+        }
+    }
+    
+    # Get parameters for the requested style or use default
+    parameters = style_params.get(style, style_params['default'])
+    
+    return jsonify({
+        'success': True,
+        'style': style,
+        'parameters': parameters
     })
 
 @app.route('/api/download', methods=['POST'])

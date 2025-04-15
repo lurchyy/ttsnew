@@ -3,6 +3,9 @@ body {
     padding-top: 20px;
     padding-bottom: 40px;
     background-color: #f8f9fa;
+    font-family: 'Open Sans', sans-serif;
+    color: #495057;
+    line-height: 1.6;
 }
 
 .main-header {
@@ -16,6 +19,12 @@ body {
     margin-bottom: 0.5rem;
 }
 
+.container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
 .card {
     margin-bottom: 20px;
     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -24,8 +33,9 @@ body {
 }
 
 .card-header {
-    background-color: #f1f8ff;
-    border-bottom: 1px solid #d1e7ff;
+    background-color: #6c5ce7;
+    color: white;
+    border-radius: 10px 10px 0 0 !important;
     font-weight: 600;
 }
 
@@ -119,6 +129,131 @@ body {
     color: #6c757d;
 }
 
+/* Input and Parameter styling */
+textarea {
+    resize: vertical;
+    min-height: 150px;
+    border-radius: 5px;
+    border: 1px solid #ced4da;
+}
+
+.slider-container {
+    padding: 10px 0;
+}
+
+.slider-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.slider-value {
+    font-weight: bold;
+    color: #6c5ce7;
+}
+
+.form-label {
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.form-range {
+    height: 1.5rem;
+}
+
+.form-select {
+    border-radius: 5px;
+}
+
+/* Audio player styling */
+.audio-player {
+    width: 100%;
+    margin-top: 10px;
+    border-radius: 5px;
+}
+
+/* Button styling */
+.btn-primary {
+    background-color: #6c5ce7;
+    border-color: #6c5ce7;
+}
+
+.btn-primary:hover {
+    background-color: #5649c0;
+    border-color: #5649c0;
+}
+
+.btn-outline-primary {
+    color: #6c5ce7;
+    border-color: #6c5ce7;
+}
+
+.btn-outline-primary:hover {
+    color: white;
+    background-color: #6c5ce7;
+    border-color: #6c5ce7;
+}
+
+/* Status message styling */
+.status {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 5px;
+    display: none;
+}
+
+/* Streaming toggle and indicator styling */
+.form-check-input:checked {
+    background-color: #6c5ce7;
+    border-color: #6c5ce7;
+}
+
+.streaming-toggle-container {
+    display: flex;
+    align-items: center;
+    margin: 15px 0;
+}
+
+.streaming-toggle-container .form-check-label {
+    margin-left: 10px;
+}
+
+#streaming-indicator {
+    display: none;
+    margin-left: 15px;
+    padding: 5px 10px;
+    background-color: #e9ecef;
+    border-radius: 15px;
+    font-size: 0.85rem;
+    color: #495057;
+    animation: pulse 2s infinite;
+}
+
+#streaming-indicator.active {
+    background-color: #a29bfe;
+    color: white;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+/* Info text styling */
+.info-text {
+    font-size: 0.9rem;
+    color: #6c757d;
+    margin-top: 5px;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .row {
@@ -132,6 +267,18 @@ body {
     
     .main-header {
         font-size: 2rem;
+    }
+    
+    .card-header {
+        padding: 10px 15px;
+    }
+    
+    .card-body {
+        padding: 15px;
+    }
+    
+    .btn {
+        margin-bottom: 10px;
     }
 }
 
@@ -159,25 +306,23 @@ audio::-webkit-media-controls-play-button {
     border-radius: 50%;
 }
 
-/* Button hover effects */
-.btn-primary:hover {
-    background-color: #0b5ed7;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
-.btn-success:hover {
-    background-color: #157347;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
 /* Footer */
 footer {
     margin-top: 3rem;
     padding-top: 1rem;
     border-top: 1px solid #e9ecef;
     color: #6c757d;
+}
+
+/* For the style info display */
+#style-info {
+    margin-top: 5px;
+    font-style: italic;
+    color: #6c757d;
+}
+
+/* For the reset streaming button */
+#reset-streaming-button {
+    margin-left: 10px;
+    font-size: 0.85rem;
 } 
