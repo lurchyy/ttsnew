@@ -18,6 +18,24 @@ st.set_page_config(
     layout="wide"
 )
 
+# Detect CUDA availability and set device accordingly
+device = "cpu"
+if torch.cuda.is_available():
+    try:
+        # Test CUDA with a small tensor operation
+        test_tensor = torch.zeros(1).cuda()
+        test_tensor = test_tensor + 1
+        device = "cuda"
+        st.success("🚀 GPU detected and working! Using CUDA for faster processing.")
+    except Exception as e:
+        st.warning(f"GPU detected but not working properly. Falling back to CPU. Error: {str(e)}")
+        device = "cpu"
+else:
+    st.info("No GPU detected. Using CPU for processing (this will be slower).")
+
+# Set default device for torch
+torch.set_default_device(device)
+
 # Fix for ffmpeg - attempt to install and make it available
 try:
     from pydub.utils import which
@@ -108,7 +126,7 @@ def setup_torch_compatibility():
 # 📦 Load Bark models
 @st.cache_resource
 def load_bark_models():
-    with st.spinner("📦 Loading Bark models (this may take a minute)..."):
+    with st.spinner(f"📦 Loading Bark models on {device.upper()} (this may take a minute)..."):
         preload_models()
     st.session_state.models_loaded = True
     return True
@@ -242,12 +260,13 @@ def generate_audio_segment(text, voice_preset, pitch, speed, text_temp, waveform
     processed_text = process_text_for_speech(text, add_long_pauses)
     
     # Generate raw Bark audio with adjusted parameters
-    audio_array = generate_audio(
-        processed_text, 
-        history_prompt=voice_preset,
-        text_temp=text_temp,
-        waveform_temp=waveform_temp
-    )
+    with torch.device(device):
+        audio_array = generate_audio(
+            processed_text, 
+            history_prompt=voice_preset,
+            text_temp=text_temp,
+            waveform_temp=waveform_temp
+        )
     
     # Apply pitch and speed adjustments directly to the numpy array
     if pitch != 0 or speed != 1.0:
@@ -282,6 +301,31 @@ def generate_audio_segment(text, voice_preset, pitch, speed, text_temp, waveform
     else:
         # Return raw audio as NumPy array
         return audio_array
+
+# Function to clean up memory (especially important for CPU mode)
+def cleanup_memory():
+    if device == "cpu":
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        # Clear CUDA cache if it was used at some point
+        if hasattr(torch, 'cuda'):
+            try:
+                torch.cuda.empty_cache()
+            except:
+                pass
+                
+        # Clear any cached tensors
+        for obj in gc.get_objects():
+            try:
+                if torch.is_tensor(obj):
+                    del obj
+            except:
+                pass
+        
+        # Final garbage collection
+        gc.collect()
 
 # ▶️ Main generation function
 def generate_audio_from_text(text, voice_preset, pitch, speed, text_temp, waveform_temp, add_long_pauses, streaming=False):
@@ -331,6 +375,10 @@ def generate_audio_from_text(text, voice_preset, pitch, speed, text_temp, wavefo
                 
                 progress_bar.progress(100)
                 status_text.text("✅ Audio generation complete!")
+                
+                # Clean up memory in CPU mode
+                cleanup_memory()
+                
                 return True
             else:
                 # No new text to process
@@ -367,6 +415,10 @@ def generate_audio_from_text(text, voice_preset, pitch, speed, text_temp, wavefo
             
             progress_bar.progress(100)
             status_text.text("✅ Audio generation complete!")
+            
+            # Clean up memory in CPU mode
+            cleanup_memory()
+            
             return True
             
     except Exception as e:
@@ -444,6 +496,21 @@ def check_streaming_changes(current_text, voice_preset, pitch, speed, text_temp,
 def main():
     # Initialize Torch compatibility
     setup_torch_compatibility()
+    
+    # Optimize memory usage for CPU mode
+    if device == "cpu":
+        # Apply memory optimizations when running on CPU
+        torch.set_num_threads(max(4, os.cpu_count() or 4))  # Set reasonable thread count
+        # Display CPU optimization info
+        with st.expander("ℹ️ CPU Performance Info", expanded=False):
+            st.info(
+                "Running in CPU mode. Performance will be slower than with a GPU. "
+                "For faster processing:\n"
+                "- Keep text inputs shorter\n"
+                "- Use fewer voice variations in a single session\n"
+                "- Be patient during model loading and audio generation"
+            )
+            st.write(f"Using {torch.get_num_threads()} CPU threads")
     
     # Display header
     st.markdown("<div class='main-header'>🔊 Bark Text-to-Speech Generator</div>", unsafe_allow_html=True)
