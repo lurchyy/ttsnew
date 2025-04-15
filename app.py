@@ -12,8 +12,10 @@ import sys
 import gc
 import logging
 import base64
+import json
+import uuid
 from pydub import AudioSegment
-from flask import Flask, request, jsonify, render_template, send_file, Response
+from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.serving import run_simple
 from waitress import serve
@@ -29,6 +31,9 @@ CORS(app)  # Allow cross-origin requests
 # Global variables
 models_loaded = False
 current_voice = "v2/en_speaker_1"
+
+# Session storage for streaming audio (in a real app, use a proper session store)
+streaming_sessions = {}
 
 # Detect CUDA availability and set device accordingly
 device = "cpu"
@@ -84,6 +89,18 @@ Voice_presets = {
     "British Voice": "v2/en_speaker_0",
 }
 
+# Find new text to process in streaming mode
+def find_new_text(previous_text, current_text):
+    if not previous_text:
+        return current_text
+    
+    # If text got shorter, start over
+    if len(current_text) < len(previous_text) or not current_text.startswith(previous_text):
+        return current_text
+    
+    # Extract only the new characters
+    return current_text[len(previous_text):]
+
 # Modify text to add more natural pauses if needed
 def process_text_for_speech(text, add_long_pauses=True):
     if not add_long_pauses:
@@ -98,6 +115,52 @@ def process_text_for_speech(text, add_long_pauses=True):
     text = text.replace(':", "', ':"  "')  # Double space after quotes
     
     return text
+
+# Combine audio segments
+def combine_audio_segments(segments):
+    if not segments:
+        return None
+        
+    # If there's only one segment, return it
+    if len(segments) == 1:
+        return segments[0]
+    
+    combined = None
+    
+    # Sort segments by their keys (which should be indices)
+    sorted_segments = sorted(segments.items(), key=lambda x: int(x[0]) if x[0].isdigit() else float('inf'))
+    
+    for _, segment in sorted_segments:
+        if segment is None:
+            continue
+            
+        # Convert to AudioSegment
+        if isinstance(segment, bytes):
+            # If it's bytes (already processed)
+            segment_buffer = io.BytesIO(segment)
+            segment_audio = AudioSegment.from_wav(segment_buffer)
+        elif isinstance(segment, np.ndarray):
+            # If it's numpy array
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
+                write_wav(temp_file.name, rate=SAMPLE_RATE, data=segment)
+                segment_audio = AudioSegment.from_wav(temp_file.name)
+        else:
+            # Skip if invalid format
+            continue
+            
+        if combined is None:
+            combined = segment_audio
+        else:
+            combined += segment_audio
+    
+    # Convert back to bytes
+    if combined:
+        buffer = io.BytesIO()
+        combined.export(buffer, format="wav")
+        buffer.seek(0)
+        return buffer.read()
+    
+    return None
 
 # Function to clean up memory (especially important for CPU mode)
 def cleanup_memory():
@@ -133,7 +196,7 @@ def apply_voice_style(style):
         return 0.9, 0.8, True
     return 0.7, 0.7, True  # Default fallback
 
-# Generation function for a text segment
+# Generate audio for a text segment
 def generate_audio_segment(text, voice_preset, pitch, speed, text_temp, waveform_temp, add_long_pauses):
     if not text.strip():
         return None
@@ -187,7 +250,7 @@ def generate_audio_segment(text, voice_preset, pitch, speed, text_temp, waveform
             buffer.seek(0)
             return buffer.read()
 
-# Main generation function
+# Main generation function for non-streaming mode
 def generate_audio_from_text(text, voice_preset, pitch, speed, text_temp, waveform_temp, add_long_pauses):
     try:
         logger.info(f"Generating audio for text: {text[:50]}{'...' if len(text) > 50 else ''}")
@@ -210,6 +273,97 @@ def generate_audio_from_text(text, voice_preset, pitch, speed, text_temp, wavefo
             
     except Exception as e:
         logger.error(f"Error generating audio: {str(e)}")
+        return None
+
+# Generate audio for streaming with session management
+def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_temp, waveform_temp, add_long_pauses):
+    try:
+        # Create session if it doesn't exist
+        if session_id not in streaming_sessions:
+            streaming_sessions[session_id] = {
+                "last_text": "",
+                "segments": {},
+                "voice_preset": voice_preset,
+                "params": {
+                    "pitch": pitch,
+                    "speed": speed,
+                    "text_temp": text_temp,
+                    "waveform_temp": waveform_temp,
+                    "add_long_pauses": add_long_pauses
+                },
+                "last_access": time.time()
+            }
+            logger.info(f"Created new streaming session: {session_id}")
+        
+        session = streaming_sessions[session_id]
+        session["last_access"] = time.time()
+        
+        # Check if voice or parameter settings changed
+        params_changed = (
+            session["voice_preset"] != voice_preset or
+            session["params"]["pitch"] != pitch or
+            session["params"]["speed"] != speed or
+            session["params"]["text_temp"] != text_temp or
+            session["params"]["waveform_temp"] != waveform_temp or
+            session["params"]["add_long_pauses"] != add_long_pauses
+        )
+        
+        # If parameters changed, reset the session
+        if params_changed:
+            logger.info(f"Voice or parameters changed, resetting session {session_id}")
+            session["segments"] = {}
+            session["last_text"] = ""
+            session["voice_preset"] = voice_preset
+            session["params"] = {
+                "pitch": pitch,
+                "speed": speed,
+                "text_temp": text_temp,
+                "waveform_temp": waveform_temp,
+                "add_long_pauses": add_long_pauses
+            }
+        
+        # Find new text
+        new_text = find_new_text(session["last_text"], text)
+        
+        if not new_text:
+            logger.info(f"No new text to process for session {session_id}")
+            # No new text, return whatever we have
+            if not session["segments"]:
+                return None
+                
+            combined_audio = combine_audio_segments(session["segments"])
+            return combined_audio
+            
+        logger.info(f"Processing new text for streaming: {new_text[:30]}{'...' if len(new_text) > 30 else ''}")
+        
+        # Process the new text
+        new_audio = generate_audio_segment(
+            new_text,
+            voice_preset,
+            pitch,
+            speed,
+            text_temp,
+            waveform_temp,
+            add_long_pauses
+        )
+        
+        # Store the new segment with a unique index
+        segment_key = str(len(session["segments"]))
+        session["segments"][segment_key] = new_audio
+        
+        # Update the last processed text
+        session["last_text"] = text
+        
+        # Combine all segments
+        combined_audio = combine_audio_segments(session["segments"])
+        
+        # Clean up memory in CPU mode
+        cleanup_memory()
+        
+        return combined_audio
+        
+    except Exception as e:
+        logger.error(f"Error in streaming audio generation: {str(e)}")
         return None
 
 # Check and setup ffmpeg
@@ -281,6 +435,20 @@ def initialize_app():
 # Register initialization with Flask
 with app.app_context():
     initialize_app()
+
+# Session cleanup task (would need a proper scheduler in production)
+def cleanup_old_sessions():
+    # This is a simple cleanup that could be expanded in a real app
+    current_time = time.time()
+    to_remove = []
+    
+    for session_id, session in streaming_sessions.items():
+        if 'last_access' in session and current_time - session['last_access'] > 3600:  # 1 hour timeout
+            to_remove.append(session_id)
+    
+    for session_id in to_remove:
+        logger.info(f"Removing expired session: {session_id}")
+        del streaming_sessions[session_id]
 
 # Routes
 @app.route('/')
@@ -355,6 +523,110 @@ def api_generate():
             'error': str(e)
         }), 500
 
+@app.route('/api/generate_streaming', methods=['POST'])
+def api_generate_streaming():
+    try:
+        data = request.json
+        
+        # Extract parameters
+        session_id = data.get('session_id')
+        if not session_id:
+            # Create a unique session ID if not provided
+            session_id = str(uuid.uuid4())
+            
+        text = data.get('text', '')
+        voice_name = data.get('voice', 'Voice 1')
+        pitch = int(data.get('pitch', 0))
+        speed = float(data.get('speed', 1.0))
+        voice_style = data.get('style', 'default').lower()
+        
+        # Get voice preset
+        voice_preset = Voice_presets.get(voice_name, Voice_presets['Voice 1'])
+        
+        # Apply voice style
+        text_temp, waveform_temp, add_pauses = apply_voice_style(voice_style)
+        
+        # Override with custom values if provided
+        if 'text_temp' in data:
+            text_temp = float(data.get('text_temp'))
+        if 'waveform_temp' in data:
+            waveform_temp = float(data.get('waveform_temp'))
+        if 'add_pauses' in data:
+            add_pauses = data.get('add_pauses')
+        
+        # Generate audio streaming
+        audio_data = generate_audio_streaming(
+            session_id,
+            text,
+            voice_preset,
+            pitch,
+            speed,
+            text_temp,
+            waveform_temp,
+            add_pauses
+        )
+        
+        if audio_data:
+            # Create response with audio data
+            audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'audio': audio_b64,
+                'format': 'wav',
+                'sample_rate': SAMPLE_RATE,
+                'params': {
+                    'voice': voice_name,
+                    'voice_preset': voice_preset,
+                    'pitch': pitch,
+                    'speed': speed,
+                    'text_temp': text_temp,
+                    'waveform_temp': waveform_temp,
+                    'add_pauses': add_pauses
+                }
+            })
+        else:
+            return jsonify({
+                'success': True,  # Still success but no new audio
+                'session_id': session_id,
+                'audio': None,
+                'message': 'No new audio to generate'
+            })
+    
+    except Exception as e:
+        logger.error(f"Error in streaming generation endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/reset_streaming', methods=['POST'])
+def reset_streaming():
+    try:
+        data = request.json
+        session_id = data.get('session_id')
+        
+        if session_id and session_id in streaming_sessions:
+            # Reset the session
+            logger.info(f"Manually resetting streaming session: {session_id}")
+            del streaming_sessions[session_id]
+            return jsonify({
+                'success': True,
+                'message': 'Streaming session reset successfully'
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'message': 'No active session to reset'
+            })
+    
+    except Exception as e:
+        logger.error(f"Error resetting streaming session: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/api/voices', methods=['GET'])
 def get_voices():
     return jsonify({
@@ -403,10 +675,14 @@ def download_audio():
 
 @app.route('/health', methods=['GET'])
 def health_check():
+    # Run session cleanup
+    cleanup_old_sessions()
+    
     return jsonify({
         'status': 'healthy',
         'device': device,
-        'models_loaded': models_loaded
+        'models_loaded': models_loaded,
+        'active_sessions': len(streaming_sessions)
     })
 
 if __name__ == "__main__":

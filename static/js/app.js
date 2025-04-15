@@ -1,5 +1,11 @@
 // Global variables
 let currentAudio = null;
+let currentStreamingSession = null;
+let streamingDebounceTimeout = null;
+let isStreamingMode = true;
+let streamingInProgress = false;
+const debounceDelay = 800; // ms to wait after typing before generating audio
+const minStreamingTextLength = 8; // Minimum text length before we start streaming
 
 // Initialize on document load
 document.addEventListener('DOMContentLoaded', function() {
@@ -13,6 +19,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const waveformTempSlider = document.getElementById('waveformTemp');
     const addPausesCheckbox = document.getElementById('addPauses');
     const generateBtn = document.getElementById('generateBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const streamingToggle = document.getElementById('streamingToggle');
+    const streamingIndicator = document.getElementById('streamingIndicator');
     const progressContainer = document.getElementById('progressContainer');
     const progressText = document.getElementById('progressText');
     const audioContainer = document.getElementById('audioContainer');
@@ -33,6 +42,53 @@ document.addEventListener('DOMContentLoaded', function() {
     textTempSlider.addEventListener('input', () => textTempValue.textContent = textTempSlider.value);
     waveformTempSlider.addEventListener('input', () => waveformTempValue.textContent = waveformTempSlider.value);
     
+    // Toggle streaming mode
+    streamingToggle.addEventListener('change', () => {
+        isStreamingMode = streamingToggle.checked;
+        resetStreamingSession(); // Always reset when toggling
+        
+        if (isStreamingMode) {
+            streamingIndicator.style.display = 'block';
+            resetBtn.style.display = 'block';
+            generateBtn.textContent = 'Generate Now 🎤';
+            
+            // Start streaming with current text if long enough
+            if (textInput.value.trim().length >= minStreamingTextLength) {
+                processStreamingText();
+            }
+        } else {
+            streamingIndicator.style.display = 'none';
+            resetBtn.style.display = 'none';
+            generateBtn.textContent = 'Generate Audio 🎤';
+        }
+    });
+    
+    // Text input streaming
+    textInput.addEventListener('input', () => {
+        if (isStreamingMode && !streamingInProgress && textInput.value.trim().length >= minStreamingTextLength) {
+            // Clear any existing timeout
+            if (streamingDebounceTimeout) {
+                clearTimeout(streamingDebounceTimeout);
+            }
+            
+            // Set new timeout to debounce rapid typing
+            streamingDebounceTimeout = setTimeout(() => {
+                processStreamingText();
+            }, debounceDelay);
+        }
+    });
+    
+    // Voice or style changes should reset streaming
+    voiceSelect.addEventListener('change', () => {
+        if (isStreamingMode) {
+            resetStreamingSession();
+            // Regenerate with new voice if text exists
+            if (textInput.value.trim().length >= minStreamingTextLength) {
+                processStreamingText();
+            }
+        }
+    });
+    
     // Load voices
     loadVoices();
     
@@ -43,17 +99,223 @@ document.addEventListener('DOMContentLoaded', function() {
     styleSelect.addEventListener('change', () => {
         updateStyleInfo();
         applyStyle(styleSelect.value);
+        
+        // Regenerate with new style if streaming is on
+        if (isStreamingMode && textInput.value.trim().length >= minStreamingTextLength) {
+            resetStreamingSession();
+            processStreamingText();
+        }
     });
     
-    // Generate audio
-    generateBtn.addEventListener('click', generateAudio);
+    // Parameter changes
+    pitchSlider.addEventListener('change', parameterChangeHandler);
+    speedSlider.addEventListener('change', parameterChangeHandler);
+    textTempSlider.addEventListener('change', parameterChangeHandler);
+    waveformTempSlider.addEventListener('change', parameterChangeHandler);
+    addPausesCheckbox.addEventListener('change', parameterChangeHandler);
+    
+    // Generate audio button
+    generateBtn.addEventListener('click', () => {
+        if (isStreamingMode) {
+            // In streaming mode, generate or regenerate immediately
+            resetStreamingSession();
+            processStreamingText(true); // force immediate generation
+        } else {
+            // In normal mode, use regular generation
+            generateAudio();
+        }
+    });
+    
+    // Reset streaming session
+    resetBtn.addEventListener('click', () => {
+        resetStreamingSession();
+        showStatus('Streaming session reset', 'info');
+    });
     
     // Download audio
     downloadBtn.addEventListener('click', downloadAudio);
     
     // Initialize
     updateStyleInfo();
+    
+    // Set initial streaming UI state
+    if (isStreamingMode) {
+        streamingIndicator.style.display = 'block';
+        resetBtn.style.display = 'block';
+    } else {
+        streamingIndicator.style.display = 'none';
+        resetBtn.style.display = 'none';
+    }
 });
+
+// Handler for parameter changes in streaming mode
+function parameterChangeHandler() {
+    if (isStreamingMode && !streamingInProgress) {
+        const textInput = document.getElementById('textToSpeak');
+        if (textInput.value.trim().length >= minStreamingTextLength) {
+            // Clear any existing timeout
+            if (streamingDebounceTimeout) {
+                clearTimeout(streamingDebounceTimeout);
+            }
+            
+            // Apply after a delay to avoid multiple requests during slider adjustments
+            streamingDebounceTimeout = setTimeout(() => {
+                resetStreamingSession();
+                processStreamingText();
+            }, 500);
+        }
+    }
+}
+
+// Process text in streaming mode
+function processStreamingText(immediate = false) {
+    const textInput = document.getElementById('textToSpeak');
+    const voiceSelect = document.getElementById('voiceSelection');
+    const styleSelect = document.getElementById('voiceStyle');
+    const pitchSlider = document.getElementById('pitch');
+    const speedSlider = document.getElementById('speed');
+    const textTempSlider = document.getElementById('textTemp');
+    const waveformTempSlider = document.getElementById('waveformTemp');
+    const addPausesCheckbox = document.getElementById('addPauses');
+    const progressContainer = document.getElementById('progressContainer');
+    const audioContainer = document.getElementById('audioContainer');
+    const streamingIndicator = document.getElementById('streamingIndicator');
+    
+    const text = textInput.value.trim();
+    
+    if (!text || text.length < minStreamingTextLength) {
+        return;
+    }
+    
+    // Prevent multiple concurrent streaming requests
+    if (streamingInProgress && !immediate) {
+        return;
+    }
+    
+    streamingInProgress = true;
+    
+    // Show progress indication
+    if (immediate) {
+        progressContainer.style.display = 'block';
+        streamingIndicator.innerHTML = '<i class="bi bi-broadcast"></i> Generating audio...';
+    } else {
+        streamingIndicator.innerHTML = '<i class="bi bi-broadcast"></i> Streaming audio...';
+    }
+    
+    // Prepare request data
+    const requestData = {
+        session_id: currentStreamingSession,
+        text: text,
+        voice: voiceSelect.value,
+        pitch: parseInt(pitchSlider.value),
+        speed: parseFloat(speedSlider.value),
+        style: styleSelect.value,
+        text_temp: parseFloat(textTempSlider.value),
+        waveform_temp: parseFloat(waveformTempSlider.value),
+        add_pauses: addPausesCheckbox.checked
+    };
+    
+    // Send streaming request
+    fetch('/api/generate_streaming', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        progressContainer.style.display = 'none';
+        streamingIndicator.innerHTML = '<i class="bi bi-broadcast"></i> Streaming mode active - audio updates as you type';
+        
+        if (data.success) {
+            // Store session ID for future requests
+            currentStreamingSession = data.session_id;
+            
+            // Process audio data if available
+            if (data.audio) {
+                // Convert base64 to blob
+                currentAudio = data.audio;
+                
+                // Create blob URL
+                const byteCharacters = atob(data.audio);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], {type: 'audio/wav'});
+                const audioUrl = URL.createObjectURL(blob);
+                
+                // Get current audio player state
+                const audioPlayer = document.getElementById('audioPlayer');
+                const wasPlaying = !audioPlayer.paused;
+                
+                // Set audio player source
+                audioPlayer.src = audioUrl;
+                audioContainer.style.display = 'block';
+                
+                // Resume playback if it was playing
+                if (wasPlaying) {
+                    audioPlayer.play().catch(e => {
+                        console.log('Auto-play was prevented by browser:', e);
+                    });
+                } else if (immediate) {
+                    // Auto-play on immediate generation
+                    audioPlayer.play().catch(e => {
+                        console.log('Auto-play was prevented by browser:', e);
+                    });
+                }
+                
+                if (immediate) {
+                    showStatus('Audio generated successfully!', 'success');
+                }
+            }
+        } else {
+            showStatus('Error: ' + (data.error || 'Unknown error'), 'danger');
+        }
+        
+        streamingInProgress = false;
+    })
+    .catch(error => {
+        progressContainer.style.display = 'none';
+        streamingIndicator.innerHTML = '<i class="bi bi-broadcast"></i> Streaming mode active - audio updates as you type';
+        console.error('Error in streaming generation:', error);
+        showStatus('Error: ' + error.message, 'danger');
+        streamingInProgress = false;
+    });
+}
+
+// Reset the streaming session
+function resetStreamingSession() {
+    // Only reset if we have an active session
+    if (currentStreamingSession) {
+        fetch('/api/reset_streaming', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                session_id: currentStreamingSession
+            })
+        })
+        .catch(error => {
+            console.error('Error resetting streaming session:', error);
+        });
+    }
+    
+    // Reset local session state
+    currentStreamingSession = null;
+    
+    // Reset streaming flag
+    streamingInProgress = false;
+    
+    // Clear any pending timeouts
+    if (streamingDebounceTimeout) {
+        clearTimeout(streamingDebounceTimeout);
+        streamingDebounceTimeout = null;
+    }
+}
 
 // Load available voices
 function loadVoices() {
@@ -144,7 +406,7 @@ function applyStyle(style) {
     showStatus(`Applied ${style} style settings`, 'info');
 }
 
-// Generate audio
+// Generate audio (non-streaming mode)
 function generateAudio() {
     const textInput = document.getElementById('textToSpeak');
     const voiceSelect = document.getElementById('voiceSelection');
