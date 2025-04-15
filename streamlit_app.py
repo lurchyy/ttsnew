@@ -338,23 +338,29 @@ def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_
             combined_audio = combine_audio_segments(session["segments"])
             return combined_audio
         
-        # Process the new text
-        new_audio = generate_audio_segment(
-            new_text,
-            voice_preset,
-            pitch,
-            speed,
-            text_temp,
-            waveform_temp,
-            add_long_pauses
-        )
-        
-        # Store the new segment with a unique index
-        segment_key = str(len(session["segments"]))
-        session["segments"][segment_key] = new_audio
-        
-        # Update the last processed text
-        session["last_text"] = text
+        # Process the new text - only if we have meaningful content
+        if len(new_text.strip()) > 0:
+            try:
+                new_audio = generate_audio_segment(
+                    new_text,
+                    voice_preset,
+                    pitch,
+                    speed,
+                    text_temp,
+                    waveform_temp,
+                    add_long_pauses
+                )
+                
+                if new_audio:
+                    # Store the new segment with a unique index
+                    segment_key = str(len(session["segments"]))
+                    session["segments"][segment_key] = new_audio
+                    
+                    # Update the last processed text
+                    session["last_text"] = text
+            except Exception as segment_error:
+                logger.error(f"Error processing segment: {str(segment_error)}")
+                # Continue with existing segments
         
         # Combine all segments
         combined_audio = combine_audio_segments(session["segments"])
@@ -391,6 +397,10 @@ def main():
     setup_ffmpeg()
     load_bark_models()
     
+    # Add helpful constants for streaming
+    MIN_STREAMING_CHARS = 15   # Minimum amount of new text before processing
+    MIN_STREAMING_DELAY = 3.0  # Minimum seconds between streaming updates
+    
     # Cleanup any temporary files
     try:
         bark_files = glob.glob("bark_output_*.wav")
@@ -406,12 +416,21 @@ def main():
     # Initialize session state for streaming
     if 'streaming_session_id' not in st.session_state:
         st.session_state.streaming_session_id = str(uuid.uuid4())
+    if 'last_streamed_text' not in st.session_state:
+        st.session_state.last_streamed_text = ""
+    if 'last_stream_time' not in st.session_state:
+        st.session_state.last_stream_time = 0
     
     # Main UI
     st.title("🔊 Bark Text-to-Speech Generator")
     
     # Device info
-    st.markdown(f"Running on **{device.upper()}**")
+    if device == "cuda":
+        st.markdown(f"🚀 Running on **{device.upper()}** - Audio generation will be relatively fast.")
+        st.sidebar.success("GPU acceleration is active. Expect good performance.")
+    else:
+        st.markdown(f"⚙️ Running on **{device.upper()}** - Audio generation will be slower. Please be patient.")
+        st.sidebar.info("Running on CPU. Each text segment may take 30+ seconds to process.")
     
     # Create columns for layout
     col1, col2 = st.columns([3, 1])
@@ -499,11 +518,24 @@ def main():
     
     # Process text
     if generate_button and text_input:
+        # Create a progress bar
+        progress_bar = st.progress(0)
+        
         with st.spinner("Generating audio..."):
             try:
+                # Update progress
+                progress_bar.progress(10, "Preparing text...")
+                
                 if streaming_enabled:
+                    # Update progress
+                    progress_bar.progress(30, "Setting up streaming session...")
+                    
                     # Use streaming mode
                     session_id = st.session_state.streaming_session_id
+                    
+                    # Update progress
+                    progress_bar.progress(50, "Generating audio...")
+                    
                     audio_data = generate_audio_streaming(
                         session_id,
                         text_input,
@@ -515,7 +547,13 @@ def main():
                         add_long_pauses
                     )
                 else:
+                    # Update progress
+                    progress_bar.progress(30, "Processing text...")
+                    
                     # Use standard mode
+                    # Update progress
+                    progress_bar.progress(50, "Generating audio...")
+                    
                     audio_data = generate_audio_segment(
                         text_input,
                         voice_preset,
@@ -525,6 +563,9 @@ def main():
                         waveform_temp,
                         add_long_pauses
                     )
+                
+                # Update progress
+                progress_bar.progress(80, "Processing audio...")
                 
                 if audio_data:
                     # Display audio
@@ -538,10 +579,14 @@ def main():
                         mime="audio/wav"
                     )
                     
+                    # Update progress
+                    progress_bar.progress(100, "Complete!")
                     st.success("Audio generated successfully!")
                 else:
+                    progress_bar.empty()
                     st.error("Failed to generate audio. Please try again.")
             except Exception as e:
+                progress_bar.empty()
                 st.error(f"Error generating audio: {str(e)}")
     
     # Handle automatic streaming generation (if enabled and no button press needed)
@@ -550,35 +595,58 @@ def main():
         # and if the text has changed since last check
         if 'last_streamed_text' not in st.session_state:
             st.session_state.last_streamed_text = ""
+            st.session_state.last_stream_time = 0
         
-        if text_input != st.session_state.last_streamed_text:
-            # Update with the latest text
-            st.session_state.last_streamed_text = text_input
-            
-            # Process in streaming mode
-            session_id = st.session_state.streaming_session_id
-            audio_data = generate_audio_streaming(
-                session_id,
-                text_input,
-                voice_preset,
-                pitch,
-                speed,
-                text_temp,
-                waveform_temp,
-                add_long_pauses
+        # Check if there's enough new text to process
+        new_text = find_new_text(st.session_state.last_streamed_text, text_input)
+        has_enough_new_text = len(new_text.strip()) >= MIN_STREAMING_CHARS
+        
+        # Use a debounce to avoid too frequent streaming updates
+        current_time = time.time()
+        enough_time_passed = current_time - st.session_state.last_stream_time > MIN_STREAMING_DELAY
+        
+        if text_input != st.session_state.last_streamed_text and (
+            has_enough_new_text or (
+                enough_time_passed and len(text_input.strip()) > len(st.session_state.last_streamed_text.strip())
             )
+        ):
+            # Update the timestamp
+            st.session_state.last_stream_time = current_time
             
-            if audio_data:
-                # Display audio
-                audio_placeholder.audio(audio_data, format="audio/wav")
-                
-                # Enable download
-                download_placeholder.download_button(
-                    "Download Audio",
-                    data=audio_data,
-                    file_name="generated_audio.wav",
-                    mime="audio/wav"
-                )
+            # Show a spinner while processing
+            with st.spinner("Processing text..."):
+                try:
+                    # Update with the latest text
+                    st.session_state.last_streamed_text = text_input
+                    
+                    # Process in streaming mode
+                    session_id = st.session_state.streaming_session_id
+                    audio_data = generate_audio_streaming(
+                        session_id,
+                        text_input,
+                        voice_preset,
+                        pitch,
+                        speed,
+                        text_temp,
+                        waveform_temp,
+                        add_long_pauses
+                    )
+                    
+                    if audio_data:
+                        # Display audio
+                        audio_placeholder.audio(audio_data, format="audio/wav")
+                        
+                        # Enable download
+                        download_placeholder.download_button(
+                            "Download Audio",
+                            data=audio_data,
+                            file_name="generated_audio.wav",
+                            mime="audio/wav"
+                        )
+                except Exception as streaming_error:
+                    logger.error(f"Streaming process error: {str(streaming_error)}")
+                    st.error("Error during streaming. Try using the Generate button instead.")
+                    # Don't update last_streamed_text on error so we can try again
 
 if __name__ == "__main__":
     main() 
