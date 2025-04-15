@@ -1,99 +1,79 @@
 # Bark Text-to-Speech Generator
 
-A web application for generating natural-sounding speech from text using the Bark text-to-speech model. This application provides a user-friendly interface for converting text to speech with various voice options and customization settings.
+An interactive text-to-speech application powered by Suno's Bark AI model and Streamlit.
 
 ## Features
 
-- Text-to-speech generation with 10 different voice options
+- Convert text to natural-sounding speech using state-of-the-art AI
+- Multiple voice options with different characteristics
+- Streaming mode - hear audio as you type
 - Voice style presets (Default, Natural, Expressive)
-- Pitch and speed adjustment
-- Advanced parameter tuning
-- Audio download capability
-- CPU/GPU compatibility with automatic detection
+- Advanced controls:
+  - Pitch adjustment
+  - Speed adjustment
+  - Temperature controls for variability
+  - Pause controls for natural speech
+- One-click audio download
 
 ## Requirements
 
 - Python 3.8+
-- Flask
-- PyTorch
-- Bark TTS model
-- FFmpeg
+- Packages listed in `requirements.txt`
+- FFmpeg (automatically installed if missing)
 
 ## Installation
 
-1. Clone the repository:
-   ```
-   git clone <repository-url>
-   cd <repository-directory>
-   ```
+1. Clone this repository:
+```
+git clone <repository-url>
+cd <repository-folder>
+```
 
-2. Install the required packages:
-   ```
-   pip install -r requirements.txt
-   ```
+2. Install required packages:
+```
+pip install -r requirements.txt
+```
 
 3. Run the application:
-   ```
-   python app.py
-   ```
+```
+streamlit run streamlit_app.py
+```
 
-   For production deployment:
-   ```
-   python wsgi.py
-   ```
+## Deployment to Streamlit Cloud
+
+This application is ready to deploy on Streamlit Cloud:
+
+1. Push this repository to GitHub
+2. Sign up for [Streamlit Cloud](https://streamlit.io/cloud)
+3. Create a new app, connecting to your GitHub repository
+4. Set the main file path to `streamlit_app.py`
+5. Deploy!
 
 ## Usage
 
-1. Open your web browser and navigate to `http://localhost:8080`
-2. Enter the text you want to convert to speech
-3. Select a voice and adjust parameters as desired
-4. Click "Generate Audio" to create your speech
-5. Play the audio in the browser or download it
-
-## API Endpoints
-
-The application provides the following REST API endpoints:
-
-- `GET /api/voices` - Get a list of available voices
-- `GET /api/styles` - Get a list of available voice styles
-- `POST /api/generate` - Generate audio from text
-- `POST /api/download` - Download generated audio
-- `GET /health` - Health check endpoint
-
-### Example API Request
-
-```javascript
-fetch('/api/generate', {
-    method: 'POST',
-    headers: {
-        'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-        text: "Hello, world!",
-        voice: "Voice 1",
-        pitch: 0,
-        speed: 1.0,
-        style: "natural",
-        text_temp: 0.7,
-        waveform_temp: 0.7,
-        add_pauses: true
-    })
-})
-.then(response => response.json())
-.then(data => {
-    console.log(data);
-});
-```
+1. Enter text in the text area on the left side
+2. Choose a voice and style from the options on the right
+3. Adjust advanced parameters if desired
+4. Click "Generate Audio" or use streaming mode to generate as you type
+5. Listen to the generated audio and download if desired
 
 ## Performance Notes
 
-- GPU mode is significantly faster than CPU mode
-- When running in CPU mode, processing longer texts will take more time
-- The first generation after loading the app may take longer as models are loaded
+- **GPU support**: The application will use GPU acceleration if available, significantly improving generation speed
+- **CPU mode**: The app will work on CPU but will be much slower - expect several seconds of processing time per text segment
+- **Memory usage**: Bark models require significant memory, especially when using the streaming functionality
+
+## Troubleshooting
+
+- **FFmpeg errors**: The app attempts to install FFmpeg if missing. If you encounter audio processing errors, try installing FFmpeg manually on your system.
+- **CUDA errors**: If you have a GPU but encounter CUDA errors, ensure you have the correct CUDA toolkit installed for your version of PyTorch.
+- **Memory errors**: If you encounter out-of-memory errors, try reducing the size of text being processed at once, or run the app on a machine with more memory.
 
 ## Credits
 
-This application uses the [Bark](https://github.com/suno-ai/bark) text-to-speech model by Suno AI.
+- Built with [Streamlit](https://streamlit.io/)
+- Text-to-speech powered by [Suno's Bark](https://github.com/suno-ai/bark)
+- Audio processing using [pydub](https://github.com/jiaaro/pydub)
 
 ## License
 
