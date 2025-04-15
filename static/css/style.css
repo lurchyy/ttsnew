@@ -1,0 +1,183 @@
+/* Main styling for Bark TTS app */
+body {
+    padding-top: 20px;
+    padding-bottom: 40px;
+    background-color: #f8f9fa;
+}
+
+.main-header {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+}
+
+.sub-header {
+    font-size: 1.5rem;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.card {
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.card-header {
+    background-color: #f1f8ff;
+    border-bottom: 1px solid #d1e7ff;
+    font-weight: 600;
+}
+
+.form-range::-webkit-slider-thumb {
+    background: #0d6efd;
+}
+
+.form-range::-moz-range-thumb {
+    background: #0d6efd;
+}
+
+.form-range::-ms-thumb {
+    background: #0d6efd;
+}
+
+#generateBtn {
+    margin-top: 10px;
+    width: 100%;
+}
+
+#downloadBtn {
+    width: 100%;
+}
+
+#progressContainer {
+    display: none;
+    margin-top: 20px;
+}
+
+#audioContainer {
+    display: none;
+    margin-top: 20px;
+}
+
+.device-badge {
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    display: inline-block;
+    margin-bottom: 15px;
+}
+
+.gpu {
+    background-color: #28a745;
+    color: white;
+}
+
+.cpu {
+    background-color: #ffc107;
+    color: #212529;
+}
+
+.loading {
+    margin-top: 2rem;
+    text-align: center;
+}
+
+.loading-spinner {
+    border: 6px solid #f3f3f3;
+    border-top: 6px solid #3498db;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 15px auto;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.status-message {
+    display: none;
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.info-box {
+    background-color: #e9f7fe;
+    border: 1px solid #b3e0ff;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+#styleInfo {
+    font-style: italic;
+    margin-top: 5px;
+    color: #6c757d;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .row {
+        flex-direction: column;
+    }
+    
+    .col-md-8,
+    .col-md-4 {
+        width: 100%;
+    }
+    
+    .main-header {
+        font-size: 2rem;
+    }
+}
+
+/* Animations */
+.card {
+    transition: transform 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-3px);
+}
+
+/* Audio player styling */
+audio {
+    border-radius: 30px;
+    width: 100%;
+}
+
+audio::-webkit-media-controls-panel {
+    background-color: #f1f8ff;
+}
+
+audio::-webkit-media-controls-play-button {
+    background-color: #0d6efd;
+    border-radius: 50%;
+}
+
+/* Button hover effects */
+.btn-primary:hover {
+    background-color: #0b5ed7;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+}
+
+.btn-success:hover {
+    background-color: #157347;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+}
+
+/* Footer */
+footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e9ecef;
+    color: #6c757d;
+} 
