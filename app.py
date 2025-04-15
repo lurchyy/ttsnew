@@ -10,14 +10,43 @@ import tempfile
 import os
 import glob
 import subprocess
+import sys
 
-# Try to install ffmpeg if not present
+# Fix for ffmpeg - attempt to install and make it available
 try:
-    subprocess.run(["apt-get", "update", "-y"], capture_output=True)
-    subprocess.run(["apt-get", "install", "-y", "ffmpeg"], capture_output=True)
-    print("Installed ffmpeg")
+    from pydub.utils import which
+    
+    # Only install if not found
+    if which("ffmpeg") is None:
+        st.warning("Installing ffmpeg dependencies - this may take a moment...")
+        
+        # Try apt-get if available (Linux)
+        try:
+            subprocess.check_call(
+                ["apt-get", "update", "-y"], 
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL
+            )
+            subprocess.check_call(
+                ["apt-get", "install", "-y", "ffmpeg"],
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL
+            )
+            st.success("ffmpeg installed successfully!")
+        except:
+            # Try installing a Python package as fallback
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "ffmpeg-python"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            st.info("Installed ffmpeg-python package as a fallback.")
+    
+    # Set environment variable to help pydub find ffmpeg
+    os.environ["PATH"] += os.pathsep + os.path.dirname(which("ffmpeg") or "")
+    
 except Exception as e:
-    print(f"Unable to install ffmpeg: {str(e)}")
+    st.error(f"Note: Could not install ffmpeg. Some audio processing features may be limited. Error: {str(e)}")
 
 # Page configuration
 st.set_page_config(
@@ -354,10 +383,10 @@ def apply_voice_style(style):
         return 0.6, 0.5, True
     elif style == 'expressive':
         return 0.9, 0.8, True
-    elif style == 'calm':
-        return 0.4, 0.4, True
-    elif style == 'precise':
-        return 0.3, 0.2, False
+    # elif style == 'calm':
+    #     return 0.4, 0.4, True
+    # elif style == 'precise':
+    #     return 0.3, 0.2, False
     return 0.7, 0.7, True  # Default fallback
 
 # Function to check for streaming text changes
