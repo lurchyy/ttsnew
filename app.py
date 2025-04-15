@@ -506,7 +506,7 @@ def main():
         with col1c:
             voice_style = st.selectbox(
                 "Voice Style:",
-                options=["Default", "Natural", "Expressive", "Calm", "Precise"],
+                options=["Default", "Natural", "Expressive"],
                 index=0,
                 key="voice_style"
             )
