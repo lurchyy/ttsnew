@@ -24,6 +24,10 @@ models_loaded = False
 streaming_sessions = {}
 device = "cpu"  # Default to CPU, will detect GPU if available
 
+# Streaming constants
+MIN_STREAMING_CHARS = 15   # Minimum amount of new text before processing
+MIN_STREAMING_DELAY = 1.5  # Minimum seconds between streaming updates
+
 # Selected Voice Presets
 Voice_presets = {
     "Voice 1": "v2/en_speaker_1",
@@ -62,6 +66,8 @@ class SessionState:
     def __init__(self):
         self.streaming_sessions = {}
         self.current_session_id = str(uuid.uuid4())
+        self.last_streamed_text = ""
+        self.last_stream_time = 0
 
 state = SessionState()
 
@@ -397,8 +403,76 @@ def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_
 def reset_streaming_session():
     global state
     state.current_session_id = str(uuid.uuid4())
+    state.last_streamed_text = ""
+    state.last_stream_time = 0
+    
+    # Remove old sessions
+    if state.current_session_id in state.streaming_sessions:
+        del state.streaming_sessions[state.current_session_id]
+        
     logger.info(f"Created new streaming session: {state.current_session_id}")
     return "Streaming session reset successfully!"
+
+# Process streaming text change
+def process_text_change(text, voice, style, use_streaming, pitch, speed, text_temp, waveform_temp, add_pauses):
+    global state
+    
+    if not use_streaming or not text or len(text) < 10:
+        # Don't process if streaming disabled or text too short
+        return None, ""
+    
+    # Get voice preset
+    voice_preset = Voice_presets[voice]
+    
+    # Get style parameters if not explicitly provided
+    style_preset = style_presets[style]
+    if text_temp is None:
+        text_temp = style_preset["text_temp"]
+    if waveform_temp is None:
+        waveform_temp = style_preset["waveform_temp"]
+    
+    # Check if there's enough new text to process
+    new_text = find_new_text(state.last_streamed_text, text)
+    has_enough_new_text = len(new_text.strip()) >= MIN_STREAMING_CHARS
+    
+    # Use a debounce to avoid too frequent streaming updates
+    current_time = time.time()
+    enough_time_passed = current_time - state.last_stream_time > MIN_STREAMING_DELAY
+    
+    if text != state.last_streamed_text and (
+        has_enough_new_text or (
+            enough_time_passed and len(text.strip()) > len(state.last_streamed_text.strip())
+        )
+    ):
+        # Update the timestamp
+        state.last_stream_time = current_time
+        
+        try:
+            # Update with the latest text
+            state.last_streamed_text = text
+            
+            # Process in streaming mode
+            audio_data = generate_audio_streaming(
+                state.current_session_id,
+                text,
+                voice_preset,
+                pitch,
+                speed,
+                text_temp,
+                waveform_temp,
+                add_pauses
+            )
+            
+            if audio_data:
+                return audio_data, "Streaming audio updated"
+            else:
+                return None, "Waiting for more text..."
+                
+        except Exception as streaming_error:
+            logger.error(f"Streaming process error: {str(streaming_error)}")
+            return None, f"Error during streaming: {str(streaming_error)}"
+    
+    return None, ""
 
 # Main function to generate audio
 def generate_audio_func(
@@ -538,6 +612,10 @@ def create_interface():
                     )
                     
                     generate_btn = gr.Button("Generate Audio", variant="primary")
+                    
+                    streaming_info = gr.Markdown(
+                        "Streaming mode is enabled. Type a few sentences to automatically generate audio."
+                    )
                 
                 # Output section
                 with gr.Group():
@@ -611,6 +689,16 @@ def create_interface():
                         info="Add longer pauses after punctuation for more natural speech"
                     )
         
+        # Update streaming info visibility based on streaming toggle
+        def update_streaming_info(use_streaming):
+            return gr.update(visible=use_streaming)
+            
+        use_streaming.change(
+            fn=update_streaming_info,
+            inputs=[use_streaming],
+            outputs=[streaming_info]
+        )
+        
         # Initialize style info
         style_select.change(
             fn=style_change,
@@ -623,6 +711,23 @@ def create_interface():
             fn=reset_streaming_session,
             inputs=[],
             outputs=[status_output]
+        )
+        
+        # Handle text changes for streaming
+        text_input.change(
+            fn=process_text_change,
+            inputs=[
+                text_input, 
+                voice_select,
+                style_select,
+                use_streaming,
+                pitch_slider,
+                speed_slider,
+                text_temp_slider,
+                waveform_temp_slider,
+                add_pauses
+            ],
+            outputs=[audio_output, status_output]
         )
         
         # Handle generate button
