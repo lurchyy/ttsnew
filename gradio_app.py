@@ -262,46 +262,6 @@ def find_new_text(previous_text, current_text):
     # Extract only the new characters
     return current_text[len(previous_text):]
 
-# Combine audio segments
-def combine_audio_segments(segments):
-    if not segments:
-        return None
-        
-    # If there's only one segment, return it
-    if len(segments) == 1:
-        return segments[0]
-    
-    combined = None
-    
-    # Sort segments by their keys (which should be indices)
-    sorted_segments = sorted(segments.items(), key=lambda x: int(x[0]) if x[0].isdigit() else float('inf'))
-    
-    for _, segment in sorted_segments:
-        if segment is None:
-            continue
-            
-        # Convert to AudioSegment
-        if isinstance(segment, tuple) and len(segment) == 2:
-            # It's a (sample_rate, array) tuple
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
-                write_wav(temp_file.name, rate=segment[0], data=segment[1])
-                segment_audio = AudioSegment.from_wav(temp_file.name)
-        else:
-            # Skip if invalid format
-            continue
-            
-        if combined is None:
-            combined = segment_audio
-        else:
-            combined += segment_audio
-    
-    # Convert back to array format
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
-        combined.export(temp_file.name, format="wav")
-        sample_rate, audio_array = SAMPLE_RATE, np.array(AudioSegment.from_wav(temp_file.name).get_array_of_samples())
-    
-    return (sample_rate, audio_array)
-
 # Generate audio with streaming (incremental updates)
 def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_temp, waveform_temp, add_long_pauses):
     try:
@@ -312,7 +272,7 @@ def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_
         if session_id not in state.streaming_sessions:
             state.streaming_sessions[session_id] = {
                 "last_text": "",
-                "segments": {},
+                "current_audio": None,
                 "voice_preset": voice_preset,
                 "params": {
                     "pitch": pitch,
@@ -341,7 +301,7 @@ def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_
         # If parameters changed, reset the session
         if params_changed:
             logger.info(f"Voice or parameters changed, resetting session {session_id}")
-            session["segments"] = {}
+            session["current_audio"] = None
             session["last_text"] = ""
             session["voice_preset"] = voice_preset
             session["params"] = {
@@ -356,18 +316,14 @@ def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_
         new_text = find_new_text(session["last_text"], text)
         
         if not new_text:
-            # No new text, return whatever we have
-            if not session["segments"]:
-                return None
-                
-            combined_audio = combine_audio_segments(session["segments"])
-            return combined_audio
+            # No new text, return current audio
+            return session["current_audio"]
         
         # Process the new text - only if we have meaningful content
         if len(new_text.strip()) > 0:
             try:
                 new_audio = generate_audio_segment(
-                    new_text,
+                    text,  # Process the entire text instead of just new text
                     voice_preset,
                     pitch,
                     speed,
@@ -377,23 +333,17 @@ def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_
                 )
                 
                 if new_audio:
-                    # Store the new segment with a unique index
-                    segment_key = str(len(session["segments"]))
-                    session["segments"][segment_key] = new_audio
-                    
-                    # Update the last processed text
+                    # Store the new audio
+                    session["current_audio"] = new_audio
                     session["last_text"] = text
             except Exception as segment_error:
                 logger.error(f"Error processing segment: {str(segment_error)}")
-                # Continue with existing segments
-        
-        # Combine all segments
-        combined_audio = combine_audio_segments(session["segments"])
+                # Continue with existing audio
         
         # Clean up memory in CPU mode
         cleanup_memory()
         
-        return combined_audio
+        return session["current_audio"]
         
     except Exception as e:
         logger.error(f"Error in streaming audio generation: {str(e)}")
