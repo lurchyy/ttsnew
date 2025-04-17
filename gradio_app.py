@@ -354,7 +354,7 @@ def reset_streaming_session():
     global state
     state.current_session_id = str(uuid.uuid4())
     state.last_streamed_text = ""
-    state.last_stream_time = 0
+    state.last_stream_time = 0  # Reset the timer
     
     # Remove old sessions
     if state.current_session_id in state.streaming_sessions:
@@ -387,6 +387,17 @@ def process_text_change(text, voice, style, use_streaming, pitch, speed, text_te
     
     # Use a debounce to avoid too frequent streaming updates
     current_time = time.time()
+    
+    # Check if we're within the initial 2-second delay period
+    if state.last_stream_time == 0:
+        state.last_stream_time = current_time
+        return state.streaming_sessions.get(state.current_session_id, {}).get("current_audio"), "Waiting for 2 seconds before processing..."
+    
+    # Enforce 2-second initial delay
+    if current_time - state.last_stream_time < 2.0:
+        return state.streaming_sessions.get(state.current_session_id, {}).get("current_audio"), "Waiting for initial delay..."
+    
+    # After initial delay, use normal debounce timing
     enough_time_passed = current_time - state.last_stream_time > MIN_STREAMING_DELAY
     
     if text != state.last_streamed_text and (
@@ -394,6 +405,9 @@ def process_text_change(text, voice, style, use_streaming, pitch, speed, text_te
             enough_time_passed and len(text.strip()) > len(state.last_streamed_text.strip())
         )
     ):
+        # Return current audio immediately while processing new text
+        current_audio = state.streaming_sessions.get(state.current_session_id, {}).get("current_audio")
+        
         # Update the timestamp
         state.last_stream_time = current_time
         
@@ -416,13 +430,14 @@ def process_text_change(text, voice, style, use_streaming, pitch, speed, text_te
             if audio_data:
                 return audio_data, "Streaming audio updated"
             else:
-                return None, "Waiting for more text..."
+                return current_audio, "Processing new text..."
                 
         except Exception as streaming_error:
             logger.error(f"Streaming process error: {str(streaming_error)}")
-            return None, f"Error during streaming: {str(streaming_error)}"
+            return current_audio, f"Error during streaming: {str(streaming_error)}"
     
-    return None, ""
+    # Return current audio if no new processing needed
+    return state.streaming_sessions.get(state.current_session_id, {}).get("current_audio"), ""
 
 # Main function to generate audio
 def generate_audio_func(
@@ -517,6 +532,10 @@ def initialize():
         model_status = "Models loaded successfully!"
     except Exception as e:
         model_status = f"Error loading models: {str(e)}"
+    
+    # Initialize streaming state
+    global state
+    state.last_stream_time = 0
     
     # Cleanup any temporary files
     try:
