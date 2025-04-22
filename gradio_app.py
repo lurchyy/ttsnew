@@ -14,6 +14,7 @@ from pydub import AudioSegment
 import subprocess
 import sys
 import gc
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -45,19 +46,24 @@ Voice_presets = {
 # Styles with their default parameters
 style_presets = {
     "Default": {
-        "text_temp": 0.7,
-        "waveform_temp": 0.7,
+        "text_temp": 0.6,
+        "waveform_temp": 0.6,
         "description": "Default style with balanced parameters."
     },
     "Natural": {
-        "text_temp": 0.6,
-        "waveform_temp": 0.5,
+        "text_temp": 0.5,
+        "waveform_temp": 0.4,
         "description": "More natural-sounding with lower temperatures for a consistent voice."
     },
     "Expressive": {
-        "text_temp": 0.9,
-        "waveform_temp": 0.8,
+        "text_temp": 0.8,
+        "waveform_temp": 0.7,
         "description": "More expressive with higher temperatures for creative variation."
+    },
+    "Clean Speech": {
+        "text_temp": 0.4,
+        "waveform_temp": 0.4,
+        "description": "Minimizes artifacts and garbled speech with very low temperatures."
     }
 }
 
@@ -66,8 +72,9 @@ class SessionState:
     def __init__(self):
         self.streaming_sessions = {}
         self.current_session_id = str(uuid.uuid4())
-        self.last_streamed_text = ""
-        self.last_stream_time = 0
+        self.debounce_time = 1.0  # Increased from 0.8 to give more time between updates
+        self.last_update_time = 0
+        self.current_audio = None
 
 state = SessionState()
 
@@ -162,6 +169,19 @@ def setup_ffmpeg():
 
 # Modify text to add more natural pauses if needed
 def process_text_for_speech(text, add_long_pauses=True):
+    # Clean and normalize the text first
+    text = text.strip()
+    
+    # Ensure text ends with proper punctuation to signal the model to stop
+    if text and not text[-1] in ['.', '!', '?']:
+        text = text + "."
+    
+    # Add proper spacing after punctuation
+    text = re.sub(r'([.!?,;:])\s*', r'\1 ', text)
+    
+    # Remove multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    
     if not add_long_pauses:
         return text
     
@@ -171,9 +191,38 @@ def process_text_for_speech(text, add_long_pauses=True):
     text = text.replace('? ', '?  ')  # Double space after question marks
     text = text.replace(', ', ',  ')  # Double space after commas
     text = text.replace('; ', ';  ')  # Double space after semicolons
-    text = text.replace(':", "', ':"  "')  # Double space after quotes
     
     return text
+
+# Function to trim silence and potential garbage at the end of audio
+def trim_audio_end(audio_array, sample_rate, silence_threshold=0.01, min_silence_duration=0.2):
+    """Trim silence and potential garbage at the end of the audio"""
+    try:
+        # Convert to AudioSegment for easier processing
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
+            write_wav(temp_file.name, rate=sample_rate, data=audio_array)
+            audio = AudioSegment.from_wav(temp_file.name)
+            
+        # Calculate silence threshold in dBFS
+        silence_thresh = audio.dBFS + 10  # Adjust based on your needs
+        
+        # Trim silence from the end
+        trimmed_audio = audio.reverse().strip_silence(
+            silence_thresh=silence_thresh,
+            silence_len=int(min_silence_duration * 1000),  # Convert to ms
+            padding=50  # Add 50ms padding
+        ).reverse()
+        
+        # Convert back to numpy array
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
+            trimmed_audio.export(temp_file.name, format="wav")
+            _, trimmed_array = SAMPLE_RATE, np.array(AudioSegment.from_wav(temp_file.name).get_array_of_samples())
+        
+        return (sample_rate, trimmed_array)
+    except Exception as e:
+        logger.warning(f"Error trimming audio: {str(e)}")
+        # Return original audio if trimming fails
+        return (sample_rate, audio_array)
 
 # Function to clean up memory (especially important for CPU mode)
 def cleanup_memory():
@@ -201,54 +250,48 @@ def cleanup_memory():
 
 # Generate audio for a text segment
 def generate_audio_segment(text, voice_preset, pitch, speed, text_temp, waveform_temp, add_long_pauses):
-    if not text.strip():
-        return None
+    try:
+        # Process text for more natural speech with pauses
+        processed_text = process_text_for_speech(text, add_long_pauses)
         
-    # Process text for more natural speech with pauses
-    processed_text = process_text_for_speech(text, add_long_pauses)
-    
-    # Generate raw Bark audio with adjusted parameters
-    with torch.device(device):
-        audio_array = generate_audio(
-            processed_text, 
-            history_prompt=voice_preset,
-            text_temp=text_temp,
-            waveform_temp=waveform_temp
-        )
-    
-    # Apply pitch and speed adjustments directly to the numpy array
-    if pitch != 0 or speed != 1.0:
-        # Convert numpy array to AudioSegment for processing
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
-            # Write audio data to temp file
-            write_wav(temp_file.name, rate=SAMPLE_RATE, data=audio_array)
-            
-            # Apply adjustments
-            sound = AudioSegment.from_wav(temp_file.name)
-            
-            # Adjust speed
-            if speed != 1.0:
-                new_frame_rate = int(sound.frame_rate * speed)
-                sound = sound._spawn(sound.raw_data, overrides={"frame_rate": new_frame_rate})
-                sound = sound.set_frame_rate(SAMPLE_RATE)
-
-            # Adjust pitch
-            if pitch != 0:
-                pitch_factor = 2 ** (pitch / 12)
-                new_rate = int(sound.frame_rate * pitch_factor)
-                sound = sound._spawn(sound.raw_data, overrides={"frame_rate": new_rate})
-                sound = sound.set_frame_rate(SAMPLE_RATE)
-            
-            # Export to in-memory file
-            buffer = io.BytesIO()
-            sound.export(buffer, format="wav")
-            buffer.seek(0)
-            
-            # Return processed audio as bytes
-            return (SAMPLE_RATE, np.array(AudioSegment.from_wav(buffer).get_array_of_samples()))
-    else:
+        # Generate raw Bark audio with adjusted parameters
+        with torch.device(device):
+            audio_array = generate_audio(
+                processed_text, 
+                history_prompt=voice_preset,
+                text_temp=text_temp,
+                waveform_temp=waveform_temp
+            )
+        
+        # Apply pitch and speed adjustments if needed
+        if pitch != 0 or speed != 1.0:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_file:
+                write_wav(temp_file.name, rate=SAMPLE_RATE, data=audio_array)
+                sound = AudioSegment.from_wav(temp_file.name)
+                
+                if speed != 1.0:
+                    new_frame_rate = int(sound.frame_rate * speed)
+                    sound = sound._spawn(sound.raw_data, overrides={"frame_rate": new_frame_rate})
+                    sound = sound.set_frame_rate(SAMPLE_RATE)
+                
+                if pitch != 0:
+                    pitch_factor = 2 ** (pitch / 12)
+                    new_rate = int(sound.frame_rate * pitch_factor)
+                    sound = sound._spawn(sound.raw_data, overrides={"frame_rate": new_rate})
+                    sound = sound.set_frame_rate(SAMPLE_RATE)
+                
+                # Convert back to numpy array
+                buffer = io.BytesIO()
+                sound.export(buffer, format="wav")
+                buffer.seek(0)
+                audio_array = np.array(AudioSegment.from_wav(buffer).get_array_of_samples())
+        
         # Return as tuple of (sample_rate, audio_array)
         return (SAMPLE_RATE, audio_array)
+        
+    except Exception as e:
+        logger.error(f"Error generating audio segment: {str(e)}")
+        return None
 
 # Find new text to process in streaming mode
 def find_new_text(previous_text, current_text):
@@ -353,8 +396,7 @@ def generate_audio_streaming(session_id, text, voice_preset, pitch, speed, text_
 def reset_streaming_session():
     global state
     state.current_session_id = str(uuid.uuid4())
-    state.last_streamed_text = ""
-    state.last_stream_time = 0  # Reset the timer
+    state.last_update_time = 0  # Reset the timer
     
     # Remove old sessions
     if state.current_session_id in state.streaming_sessions:
@@ -363,13 +405,10 @@ def reset_streaming_session():
     logger.info(f"Created new streaming session: {state.current_session_id}")
     return "Streaming session reset successfully!"
 
-# Process streaming text change
-def process_text_change(text, voice, style, use_streaming, pitch, speed, text_temp, waveform_temp, add_pauses):
-    global state
-    
-    if not use_streaming or not text or len(text) < 10:
-        # Don't process if streaming disabled or text too short
-        return None, ""
+# Text input change handler for auto-streaming
+def handle_text_change(text, voice, style, use_streaming, pitch, speed, text_temp, waveform_temp, add_pauses):
+    if not use_streaming:
+        return None, "Streaming disabled"
     
     # Get voice preset
     voice_preset = Voice_presets[voice]
@@ -381,63 +420,26 @@ def process_text_change(text, voice, style, use_streaming, pitch, speed, text_te
     if waveform_temp is None:
         waveform_temp = style_preset["waveform_temp"]
     
-    # Check if there's enough new text to process
-    new_text = find_new_text(state.last_streamed_text, text)
-    has_enough_new_text = len(new_text.strip()) >= MIN_STREAMING_CHARS
-    
-    # Use a debounce to avoid too frequent streaming updates
-    current_time = time.time()
-    
-    # Check if we're within the initial 2-second delay period
-    if state.last_stream_time == 0:
-        state.last_stream_time = current_time
-        return state.streaming_sessions.get(state.current_session_id, {}).get("current_audio"), "Waiting for 2 seconds before processing..."
-    
-    # Enforce 2-second initial delay
-    if current_time - state.last_stream_time < 2.0:
-        return state.streaming_sessions.get(state.current_session_id, {}).get("current_audio"), "Waiting for initial delay..."
-    
-    # After initial delay, use normal debounce timing
-    enough_time_passed = current_time - state.last_stream_time > MIN_STREAMING_DELAY
-    
-    if text != state.last_streamed_text and (
-        has_enough_new_text or (
-            enough_time_passed and len(text.strip()) > len(state.last_streamed_text.strip())
+    try:
+        # Generate audio directly
+        audio_data = generate_audio_segment(
+            text,
+            voice_preset,
+            pitch,
+            speed,
+            text_temp,
+            waveform_temp,
+            add_pauses
         )
-    ):
-        # Return current audio immediately while processing new text
-        current_audio = state.streaming_sessions.get(state.current_session_id, {}).get("current_audio")
         
-        # Update the timestamp
-        state.last_stream_time = current_time
-        
-        try:
-            # Update with the latest text
-            state.last_streamed_text = text
+        if audio_data and isinstance(audio_data, tuple) and len(audio_data) == 2:
+            return audio_data, "Audio generated successfully"
+        else:
+            return None, "Error generating audio"
             
-            # Process in streaming mode
-            audio_data = generate_audio_streaming(
-                state.current_session_id,
-                text,
-                voice_preset,
-                pitch,
-                speed,
-                text_temp,
-                waveform_temp,
-                add_pauses
-            )
-            
-            if audio_data:
-                return audio_data, "Streaming audio updated"
-            else:
-                return current_audio, "Processing new text..."
-                
-        except Exception as streaming_error:
-            logger.error(f"Streaming process error: {str(streaming_error)}")
-            return current_audio, f"Error during streaming: {str(streaming_error)}"
-    
-    # Return current audio if no new processing needed
-    return state.streaming_sessions.get(state.current_session_id, {}).get("current_audio"), ""
+    except Exception as e:
+        logger.error(f"Error in text change handler: {str(e)}")
+        return None, f"Error: {str(e)}"
 
 # Main function to generate audio
 def generate_audio_func(
@@ -535,7 +537,7 @@ def initialize():
     
     # Initialize streaming state
     global state
-    state.last_stream_time = 0
+    state.last_update_time = 0
     
     # Cleanup any temporary files
     try:
@@ -569,7 +571,7 @@ def create_interface():
                     use_streaming = gr.Checkbox(
                         label="Enable streaming mode", 
                         value=True,
-                        info="Generate audio incrementally as you type"
+                        info="Generate audio as you type"
                     )
                     
                     reset_btn = gr.Button("Reset Streaming Session")
@@ -590,7 +592,11 @@ def create_interface():
                 with gr.Group():
                     gr.Markdown("## Audio Output")
                     
-                    audio_output = gr.Audio(label="Generated Audio", type="numpy")
+                    audio_output = gr.Audio(
+                        label="Generated Audio",
+                        type="numpy",
+                        autoplay=False
+                    )
                     status_output = gr.Markdown()
             
             with gr.Column(scale=1):
@@ -684,7 +690,7 @@ def create_interface():
         
         # Handle text changes for streaming
         text_input.change(
-            fn=process_text_change,
+            fn=handle_text_change,
             inputs=[
                 text_input, 
                 voice_select,
@@ -735,4 +741,5 @@ def create_interface():
 # Launch the app
 if __name__ == "__main__":
     demo = create_interface()
+    demo.queue()
     demo.launch(share=True) 
